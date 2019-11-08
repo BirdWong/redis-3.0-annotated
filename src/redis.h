@@ -300,6 +300,7 @@
 /* Anti-warning macro... */
 #define REDIS_NOTUSED(V) ((void) V)
 
+// 跳表最大容纳2^32个元素
 #define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^32 elements */
 #define ZSKIPLIST_P 0.25      /* Skiplist P = 1/4 */
 
@@ -735,7 +736,7 @@ typedef struct zskiplistNode {
 
     } level[];
 
-} zskiplistNode;
+} t_zsetNode;
 
 /*
  * 跳跃表
