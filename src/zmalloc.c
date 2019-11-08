@@ -189,6 +189,10 @@ size_t zmalloc_size(void *ptr) {
 }
 #endif
 
+/*
+ * zfree函数的实现，它需要释放的空间起始地址要视库的支持能力决定。
+ * 如果库不支持获取区块大小，则需要将传入的指针前移PREFIX_SIZE，然后释放该起始地址的空间。
+ */ 
 void zfree(void *ptr) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;

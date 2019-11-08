@@ -80,6 +80,11 @@ static int _dictInit(dict *ht, dictType *type, void *privDataPtr);
 /* -------------------------- hash functions -------------------------------- */
 
 /* Thomas Wang's 32 bit Mix Function */
+/*
+ * 对于整数key，
+ * redis使用了 Thomas Wang的 32 bit Mix Function，
+ * 实现了dict.c/dictIntHashFunction函数
+ */
 unsigned int dictIntHashFunction(unsigned int key)
 {
     key += ~(key << 15);
@@ -117,6 +122,17 @@ uint32_t dictGetHashFunctionSeed(void) {
  * 1. It will not work incrementally.
  * 2. It will not produce the same results on little-endian and big-endian
  *    machines.
+ */
+/*
+ * 对于字符串形式的key，redis使用了MurmurHash2算法和djb算法:
+ * MurmurHash2算法对于key是大小写敏感的，而且在大端机器和小端机器上生成结果不一致
+ *
+ * 参数
+ * key 需要被计算的键
+ * len 键的长度
+ *
+ * 返回值
+ * h为字符串key的hash编码
  */
 unsigned int dictGenHashFunction(const void *key, int len) {
     /* 'm' and 'r' are mixing constants generated offline.
@@ -162,6 +178,9 @@ unsigned int dictGenHashFunction(const void *key, int len) {
 }
 
 /* And a case insensitive hash function (based on djb hash) */
+/*
+ * redis则借助djb函数实现了不区分大小写的散列函数
+ */
 unsigned int dictGenCaseHashFunction(const unsigned char *buf, int len) {
     unsigned int hash = (unsigned int)dict_hash_function_seed;
 
@@ -346,9 +365,13 @@ int dictExpand(dict *d, unsigned long size)
  * than one key as we use chaining) from the old to the new hash table.
  *
  * 注意，每步 rehash 都是以一个哈希表索引（桶）作为单位的，
- * 一个桶里可能会有多个节点，
+ * 一个桶里可能会 有多个节点，
  * 被 rehash 的桶里的所有节点都会被移动到新哈希表。
  *
+ * 参数：
+ * d 需要被rehash的哈希表
+ * n 本次渐进rehash需要解决dictht的数组中几个非空的entry。
+ * （此处的entry是占用在table数组上的一个成员， 可以是一个单点， 也可以是一个列表， 都算是一个entry）
  * T = O(N)
  */
 int dictRehash(dict *d, int n) {
@@ -380,6 +403,7 @@ int dictRehash(dict *d, int n) {
         /* Note that rehashidx can't overflow as we are sure there are more
          * elements because ht[0].used != 0 */
         // 确保 rehashidx 没有越界
+        // 因为ht中的table需要用rehashidx进行下标遍历，如果rehashidx大于table则会导致越界
         assert(d->ht[0].size > (unsigned)d->rehashidx);
 
         // 略过数组中为空的索引，找到下一个非空索引
@@ -401,6 +425,8 @@ int dictRehash(dict *d, int n) {
             h = dictHashKey(d, de->key) & d->ht[1].sizemask;
 
             // 插入节点到新哈希表
+            // 以栈的形式入栈，每次插入的都会在table的顶部，
+            // 利用next先指向本身在顶部的节点，然后进行替换
             de->next = d->ht[1].table[h];
             d->ht[1].table[h] = de;
 
@@ -436,6 +462,12 @@ long long timeInMilliseconds(void) {
 /*
  * 在给定毫秒数内，以 100 步为单位，对字典进行 rehash 。
  *
+ * 参数：
+ * d 需要被rehash的哈希表
+ * ms 允许rehash的时间
+ *
+ * 返回值
+ * 在指定时间内完成的重构entry近似数量
  * T = O(N)
  */
 int dictRehashMilliseconds(dict *d, int ms) {
@@ -466,9 +498,10 @@ int dictRehashMilliseconds(dict *d, int ms) {
  * dictionary so that the hash table automatically migrates from H1 to H2
  * while it is actively used. 
  *
- * 这个函数被多个通用的查找、更新操作调用，
- * 它可以让字典在被使用的同时进行 rehash 。
- *
+ * <strong>
+ *  这个函数被多个通用的查找、更新操作调用，
+ *  它可以让字典在被使用的同时进行 rehash 。
+ * </strong>
  * T = O(1)
  */
 static void _dictRehashStep(dict *d) {
@@ -680,7 +713,7 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
         while(he) {
         
             if (dictCompareKeys(d, key, he->key)) {
-                // 超找目标节点
+                // 查找目标节点
 
                 /* Unlink the element from the list */
                 // 从链表中删除
@@ -878,6 +911,9 @@ void *dictFetchValue(dict *d, const void *key) {
  * the fingerprint again when the iterator is released.
  * If the two fingerprints are different it means that the user of the iterator
  * performed forbidden operations against the dictionary while iterating. */
+/*
+ * 根据dict的两个ht的table地址， size， used，进行指纹的生成
+ */
 long long dictFingerprint(dict *d) {
     long long integers[6], hash = 0;
     int j;
@@ -1019,7 +1055,7 @@ dictEntry *dictNext(dictIterator *iter)
  */
 void dictReleaseIterator(dictIterator *iter)
 {
-
+    // 如果这个迭代器进行过迭代， 修改参数后在进行释放
     if (!(iter->index == -1 && iter->table == 0)) {
         // 释放安全迭代器时，安全迭代器计数器减一
         if (iter->safe)
@@ -1057,6 +1093,7 @@ dictEntry *dictGetRandomKey(dict *d)
     // 如果正在 rehash ，那么将 1 号哈希表也作为随机查找的目标
     if (dictIsRehashing(d)) {
         // T = O(N)
+        // 循环获取是防止单次获取的时候table[h]的位置为空的情况发生
         do {
             h = random() % (d->ht[0].size+d->ht[1].size);
             he = (h >= d->ht[0].size) ? d->ht[1].table[h - d->ht[0].size] :
@@ -1114,18 +1151,32 @@ dictEntry *dictGetRandomKey(dict *d)
  * statistics. However the function is much faster than dictGetRandomKey()
  * at producing N elements, and the elements are guaranteed to be non
  * repeating. */
+/*
+ * 随机获取一组entry
+ *
+ * 参数
+ * d 被获取的字典
+ * des 获取出来的entry数组
+ * count 需要被获取的数量
+ *
+ * 返回值
+ * stored 最终选中的keys的数量
+ */
 int dictGetRandomKeys(dict *d, dictEntry **des, int count) {
     int j; /* internal hash table id, 0 or 1. */
     int stored = 0;
-
+    // 如果获取的数量大于目前有的数量， 则将数量减少到dict的大小
     if (dictSize(d) < count) count = dictSize(d);
     while(stored < count) {
         for (j = 0; j < 2; j++) {
             /* Pick a random point inside the hash table 0 or 1. */
+            // 获取一个随机值， 用于进行table下标索引
+            // 与sizemask进行与操作， 可以避免数组越界
             unsigned int i = random() & d->ht[j].sizemask;
             int size = d->ht[j].size;
 
             /* Make sure to visit every bucket by iterating 'size' times. */
+            // 确保访问每个数组节点
             while(size--) {
                 dictEntry *he = d->ht[j].table[i];
                 while (he) {
@@ -1135,15 +1186,19 @@ int dictGetRandomKeys(dict *d, dictEntry **des, int count) {
                     des++;
                     he = he->next;
                     stored++;
+                    // 找到符合个数则返回
                     if (stored == count) return stored;
                 }
+                // 遍历下一个
                 i = (i+1) & d->ht[j].sizemask;
             }
             /* If there is only one table and we iterated it all, we should
              * already have 'count' elements. Assert this condition. */
+            // 如果没有进行rehash，但是走到这一步，说明dictht的size大于实际的数量
             assert(dictIsRehashing(d) != 0);
         }
     }
+    // 如果两个dictht的size纪录出现问题， 有可能到达
     return stored; /* Never reached. */
 }
 
@@ -1409,10 +1464,13 @@ static int _dictExpandIfNeeded(dict *d)
      * table (global setting) or we should avoid it but the ratio between
      * elements/buckets is over the "safe" threshold, we resize doubling
      * the number of buckets. */
-    // 一下两个条件之一为真时，对字典进行扩展
+    // 以下两个条件之一为真时，对字典进行扩展
     // 1）字典已使用节点数和字典大小之间的比率接近 1：1
     //    并且 dict_can_resize 为真
     // 2）已使用节点数和字典大小之间的比率超过 dict_force_resize_ratio
+    // 如果满足 0 号哈希表used>=size &&（dict_can_resize为1 或者 used/size > 5） 那就默认扩两倍大小
+    // 这里的语法与上面的两处条件不同， 是因为，当后面比率超过 dict_force_resize_ratio时，
+    // used>=size<strong>一定成立</strong>
     if (d->ht[0].used >= d->ht[0].size &&
         (dict_can_resize ||
          d->ht[0].used/d->ht[0].size > dict_force_resize_ratio))
@@ -1464,7 +1522,7 @@ static int _dictKeyIndex(dict *d, const void *key)
     dictEntry *he;
 
     /* Expand the hash table if needed */
-    // 单步 rehash
+    // 查看是否需要扩展table的大小， 如果需要进行扩展
     // T = O(N)
     if (_dictExpandIfNeeded(d) == DICT_ERR)
         return -1;
