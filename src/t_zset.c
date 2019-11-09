@@ -132,9 +132,9 @@ zskiplist *zslCreate(void) {
  * T = O(1)
  */
 void zslFreeNode(zskiplistNode *node) {
-
+    // obj的引用减少， obj可能被多个引用， 当obj不被任何对象引用时才会释放
     decrRefCount(node->obj);
-
+    // 释放节点
     zfree(node);
 }
 
@@ -176,11 +176,42 @@ void zslFree(zskiplist *zsl) {
  * 返回值介乎 1 和 ZSKIPLIST_MAXLEVEL 之间（包含 ZSKIPLIST_MAXLEVEL），
  * 根据随机算法所使用的幂次定律，越大的值生成的几率越小。
  *
+ *
+ * 当p为leval+1概率时
+ *
+ * -   层数至少为1，所以层数恰好等于1（不执行while循环体）的概率为 $1−p$。
+ * -   层数恰好等于2的概率为 $p(1−p)$（执行1次while循环体）。
+ * -   层数恰好等于3的概率为 $p^2(1−p)$（执行2次while循环体）。
+ * -   层数恰好等于4的概率为 $p^3(1−p)$（执行3次while循环体）。
+ * -   层数恰好等于k的概率为 $p^{k−1}(1−p)$（执行k-1次while循环体）。（k <= ZSKIPLIST_MAXLEVEL）
+ *
+ * 因此，一个节点的平均层数，或平均指针数为：
+ *
+ * $$
+ * 1×(1−p)+2p(1−p)+3p^2(1−p)+...+kp^{k−1}(1−p)
+ * $$
+ * $$
+ * = (1−p)\sum_{k=1}^{\infty}{kp^{k-1}}
+ * $$
+ * $$
+ * =(1−p)\frac{1}{(1−p)^2}
+ * $$
+ * $$
+ * =\frac{1}{(1−p)}
+ * $$
+ *
+ * 因此，
+ *
+ * 当 $p = \frac{1}{2}$ 时，每个节点的平均指针为2；
+ * 当 $p = \frac{1}{4}$ 时，每个节点的平均指针为1.33；
+ *
+ *
+ *
  * T = O(N)
  */
 int zslRandomLevel(void) {
     int level = 1;
-
+    // random与运算其实就是取模操作，ZS*_P为0.25，则level+1几率为0.25
     while ((random()&0xFFFF) < (ZSKIPLIST_P * 0xFFFF))
         level += 1;
 
