@@ -186,7 +186,7 @@ static intset *intsetResize(intset *is, uint32_t len) {
  * and sets "pos" to the position where "value" can be inserted. 
  *
  * 当在数组中没找到 value 时，返回 0 。
- * 并将 *pos 的值设为 value 可以插入到数组中的位置。
+ * 并将 value 可以插入到数组中的位置设为*pos 的值 。
  *
  * T = O(log N)
  */
@@ -242,6 +242,8 @@ static uint8_t intsetSearch(intset *is, int64_t value, uint32_t *pos) {
 }
 
 /* Upgrades the intset to a larger encoding and inserts the given integer. 
+ *
+ * 当插入一个当前编码容不下的value时
  *
  * 根据值 value 所使用的编码方式，对整数集合的编码进行升级，
  * 并将值 value 添加到升级后的整数集合中。
