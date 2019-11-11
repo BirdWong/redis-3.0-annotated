@@ -234,6 +234,9 @@
 /* Macro to determine type 
  *
  * 查看给定编码 enc 是否字符串编码
+ * 这里是用传进来的编码与 11000000做了与运算
+ * 因为只有整数头两位是1， 所以，如果是字符串
+ * 因为头两位有0，与操作后肯定会小于mask的
  */
 #define ZIP_IS_STR(enc) (((enc) & ZIP_STR_MASK) < ZIP_STR_MASK)
 
@@ -366,28 +369,42 @@ static unsigned int zipIntSize(unsigned char encoding) {
 /* Encode the length 'l' writing it in 'p'. If p is NULL it just returns
  * the amount of bytes required to encode such a length. 
  *
- * 编码节点长度值 l ，并将它写入到 p 中，然后返回编码 l 所需的字节数量。
+ * 编码节点长度值 rawlen ，并将它写入到 p 中，然后返回编码 encoding 所需的字节数量。
  *
- * 如果 p 为 NULL ，那么仅返回编码 l 所需的字节数量，不进行写入。
+ * 如果 p 为 NULL ，那么仅返回编码 rawlen 所需的字节数量，不进行写入encoding的格式。
+ *
+ * 如果需要encoding将encoding的格式进行返回，则格式需要与上面注解中的内容一致
  *
  * T = O(1)
  */
 static unsigned int zipEncodeLength(unsigned char *p, unsigned char encoding, unsigned int rawlen) {
     unsigned char len = 1, buf[5];
 
-    // 编码字符串
+    // 编码字符串，注意每个buf[0]字节的前两位二进制变化， 与之前开头注解中的变化相同
     if (ZIP_IS_STR(encoding)) {
         /* Although encoding is given it may not be set for strings,
          * so we determine it here using the raw length. */
         if (rawlen <= 0x3f) {
             if (!p) return len;
+            // 因为字符串长度小于64位， 所以只要一个字节保存就行， ZIP_STR_06B是0， 进行或运算， rawlen就是实际值
             buf[0] = ZIP_STR_06B | rawlen;
         } else if (rawlen <= 0x3fff) {
+            // 如果是长度大于63 小于等于16383，则需要两个字节
             len += 1;
             if (!p) return len;
+            // 因为需要做位运算，所以需要把多位字节的高位移动为单个字节（14位长度舍弃后面八位，剩余6位），
+            // 然后对这个单字节进行位运算，所以是右移一个字节， 只剩下了最左边的这个字节，
+            // 然后与一个63(6位长度的二进制， 并且每位都是1）做与运算，则平移过的字节原来多少就是多少
+            // 因为只剩下了6位字节，再次与7位的字节（第一位是1 ，剩余6位是0）做或运算，
+            // 因为平移后的肯定只有六位了， 所以第一位肯定是0， 然后ZIP_STR_14B第二位是1，
+            // 所以第二位肯定为1， 其他得做或运算， 所以后六位得到的就是平移后的本身，
+            // 因此得到的就是 |01pppppp|， 也就是字符串加长度的标识，与开头注解中的一致
             buf[0] = ZIP_STR_14B | ((rawlen >> 8) & 0x3f);
+            // 0xff是256，八位的1， rawlen的高位6个字节自然无效了， 上面被平移舍弃的八位此时做与运算
+            // 这八位原本是多少就是多少
             buf[1] = rawlen & 0xff;
         } else {
+            // 与上面同理， 注意buf[0]的开头变化
             len += 4;
             if (!p) return len;
             buf[0] = ZIP_STR_32B;
@@ -401,6 +418,7 @@ static unsigned int zipEncodeLength(unsigned char *p, unsigned char encoding, un
     } else {
         /* Implies integer encoding, so length is always 1. */
         if (!p) return len;
+        // 因为整数的编码无论如何都是1， 所以将encoding填充就行了
         buf[0] = encoding;
     }
 
@@ -436,12 +454,15 @@ static unsigned int zipEncodeLength(unsigned char *p, unsigned char encoding, un
     if ((encoding) < ZIP_STR_MASK) {                                           \
         if ((encoding) == ZIP_STR_06B) {                                       \
             (lensize) = 1;                                                     \
+            /* 如果这个encoding记录长度只有一个字节 ，那么剩下的6位字节也就储存了本entry的长度 */ \
             (len) = (ptr)[0] & 0x3f;                                           \
         } else if ((encoding) == ZIP_STR_14B) {                                \
             (lensize) = 2;                                                     \
+            /* 如果说是2^14长度的字符串， 那么ptr的第一个字节后六位与第二个字节都记录了entry的长度 */ \
             (len) = (((ptr)[0] & 0x3f) << 8) | (ptr)[1];                       \
         } else if (encoding == ZIP_STR_32B) {                                  \
             (lensize) = 5;                                                     \
+            /* 如果说是2^32长度的字符串， 那么ptr的第一个字节后六位与第二个字节都记录了entry的长度 */ \
             (len) = ((ptr)[1] << 24) |                                         \
                     ((ptr)[2] << 16) |                                         \
                     ((ptr)[3] <<  8) |                                         \
@@ -523,6 +544,7 @@ static void zipPrevEncodeLengthForceLarge(unsigned char *p, unsigned int len) {
  * T = O(1)
  */
 #define ZIP_DECODE_PREVLENSIZE(ptr, prevlensize) do {                          \
+    /* 如果前一个节点的长度小于254，则只需要一个字节保存， 否则用五个字节保存 */                                                                        \
     if ((ptr)[0] < ZIP_BIGLEN) {                                               \
         (prevlensize) = 1;                                                     \
     } else {                                                                   \
@@ -547,11 +569,12 @@ static void zipPrevEncodeLengthForceLarge(unsigned char *p, unsigned int len) {
     /* 先计算被编码长度值的字节数 */                                           \
     ZIP_DECODE_PREVLENSIZE(ptr, prevlensize);                                  \
                                                                                \
-    /* 再根据编码字节数来取出长度值 */                                         \
+    /* 再根据编码字节数来取出长度值， 如果是一个字节，那么这个字节保存的就是长度 */           \
     if ((prevlensize) == 1) {                                                  \
         (prevlen) = (ptr)[0];                                                  \
     } else if ((prevlensize) == 5) {                                           \
-        assert(sizeof((prevlensize)) == 4);                                    \
+        assert(sizeof((prevlensize)) == 4);                                     \
+        /*如果是五个字节， 那么只有四位有效，因为第一位需要标识这是五个字节 */            \
         memcpy(&(prevlen), ((char*)(ptr)) + 1, 4);                             \
         memrev32ifbe(&prevlen);                                                \
     }                                                                          \
@@ -594,26 +617,28 @@ static unsigned int zipRawEntryLength(unsigned char *p) {
     // T = O(1)
     ZIP_DECODE_LENGTH(p + prevlensize, encoding, lensize, len);
 
-    // 计算节点占用的字节数总和
+    // 计算节点占用的字节数总和=记录上一个节点长度消耗的字节+记录本节点信息小号的字节+本节点内容消耗的字节
     return prevlensize + lensize + len;
 }
 
 /* Check if string pointed to by 'entry' can be encoded as an integer.
  * Stores the integer value in 'v' and its encoding in 'encoding'. 
  *
- * 检查 entry 中指向的字符串能否被编码为整数。
+ * 检查 entry 中指向的字符串能否被编码为<strong>整数</strong>。
+ * 如果不可以就返回0
  *
  * 如果可以的话，
  * 将编码后的整数保存在指针 v 的值中，并将编码的方式保存在指针 encoding 的值中。
  *
  * 注意，这里的 entry 和前面代表节点的 entry 不是一个意思。
+ * 此处的entry是代表一个entry中的value（内容）部分， entrylen也是代表这个内容的长度
  *
  * T = O(N)
  */
 static int zipTryEncoding(unsigned char *entry, unsigned int entrylen, long long *v, unsigned char *encoding) {
     long long value;
 
-    // 忽略太长或太短的字符串
+    // 忽略太长或太短的字符串， 长度为0（数字0时entrylen也要为1）或者长度大于32的绝对不是整数
     if (entrylen >= 32 || entrylen == 0) return 0;
 
     // 尝试转换
@@ -666,8 +691,24 @@ static void zipSaveInteger(unsigned char *p, int64_t value, unsigned char encodi
         memcpy(p,&i16,sizeof(i16));
         memrev16ifbe(p);
     } else if (encoding == ZIP_INT_24B) {
+        // 当存储的长度24位时， 因为本身c没有这个数据结构， 所以将数据右移八位转变成int32_t
         i32 = value<<8;
         memrev32ifbe(&i32);
+        // 将i32内存中保存了value的位复制到p中
+        /* 验证
+            #include <stdio.h>
+            #include <stdint.h>
+            #include <string.h>
+            int main () {
+                unsigned char *p;
+                int64_t num = 5388608;
+                int32_t i32 = num<<8;
+                memcpy(p,((uint8_t*)&i32)+1,sizeof(i32)-sizeof(uint8_t));
+                uint32_t i32_2;
+                memcpy(((uint8_t*)&i32_2)+1,p,sizeof(i32_2)-sizeof(uint8_t));
+                printf("%d", i32_2 >> 8);
+            }
+         */
         memcpy(p,((uint8_t*)&i32)+1,sizeof(i32)-sizeof(uint8_t));
     } else if (encoding == ZIP_INT_32B) {
         i32 = value;
