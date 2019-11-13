@@ -64,6 +64,9 @@
  * 如果已使用节点的数量和字典大小之间的比率，
  * 大于字典强制 rehash 比率 dict_force_resize_ratio ，
  * 那么 rehash 仍然会（强制）进行。
+ *
+ * key生成hash函数已经被破解，可以进行稳定的hash碰撞：https://paper.seebug.org/180/
+ * key需要自己定义前缀， 并且对用户保密
  */
 // 指示字典是否启用 rehash 的标识
 static int dict_can_resize = 1;
@@ -845,6 +848,7 @@ void dictRelease(dict *d)
  *
  * 找到返回节点，找不到返回 NULL
  *
+ *
  * T = O(1)
  */
 dictEntry *dictFind(dict *d, const void *key)
@@ -1378,7 +1382,9 @@ unsigned long dictScan(dict *d,
         de = t0->table[v & m0];
         // 遍历桶中的所有节点
         while (de) {
+            // 遍历一个hash桶中的所有节点（一个hash桶可能不止一个节点，而是一个链表）
             fn(privdata, de);
+            // 指向下一个hash桶
             de = de->next;
         }
 
