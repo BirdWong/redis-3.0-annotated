@@ -210,7 +210,8 @@ void zslFree(zskiplist *zsl) {
  * T = O(N)
  */
 int zslRandomLevel(void) {
-    int level =qq，ZS*_P为0.25，则level+1几率为0.25
+    int level = 1;
+    // random与运算其实就是取模操作，ZS*_P为0.25，则level+1几率为0.25
     while ((random()&0xFFFF) < (ZSKIPLIST_P * 0xFFFF))
         level += 1;
 

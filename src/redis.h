@@ -396,10 +396,19 @@ typedef long long mstime_t; /* millisecond time type. */
 /*
  * Redis 对象
  */
+// 存储时间的大小， bit为单位
 #define REDIS_LRU_BITS 24
+// 最大能够存储时间的值
 #define REDIS_LRU_CLOCK_MAX ((1<<REDIS_LRU_BITS)-1) /* Max value of obj->lru */
+// LRU时钟精度在毫秒
 #define REDIS_LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
 typedef struct redisObject {
+    /*
+     * 位段(bit-field)是以位为单位来定义结构体(或联合体)中的成员变量所占的空间。含有位段的结构体(联合体)称为位段结构。
+     * 位段的定义格式为:
+     *  type [var]: digits
+     *  其中type只能为int，unsigned int，signed int三种类型
+     */
 
     // 类型
     unsigned type:4;
@@ -407,7 +416,7 @@ typedef struct redisObject {
     // 编码
     unsigned encoding:4;
 
-    // 对象最后一次被访问的时间
+    // 对象最后一次被访问的时间， 以机器上的时间为准
     unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */
 
     // 引用计数
@@ -736,7 +745,7 @@ typedef struct zskiplistNode {
 
     } level[];
 
-} t_zsetNode;
+} zskiplistNode;
 
 /*
  * 跳跃表
