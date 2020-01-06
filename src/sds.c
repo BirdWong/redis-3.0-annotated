@@ -327,6 +327,7 @@ size_t sdsAllocSize(sds s) {
  * end of the string according to 'incr'. Also set the null term
  * in the new end of the string.
  *
+ * 空间更改后的参数更新函数
  * 根据 incr 参数，增加 sds 的长度，缩减空余空间，
  * 并将 \0 放到新字符串的尾端
  *

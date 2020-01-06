@@ -393,6 +393,7 @@ void freeZsetObject(robj *o) {
 /*
  * 释放哈希对象
  */
+
 void freeHashObject(robj *o) {
 
     switch (o->encoding) {
@@ -556,6 +557,7 @@ robj *tryObjectEncoding(robj *o) {
          * Note that we avoid using shared integers when maxmemory is used
          * because every object needs to have a private LRU field for the LRU
          * algorithm to work well. */
+        // 如果没有最大内存的限制， 则可以使用共享对象， 因为不用进行LRU的算法回收内存
         if (server.maxmemory == 0 &&
             value >= 0 &&
             value < REDIS_SHARED_INTEGERS)
@@ -563,7 +565,7 @@ robj *tryObjectEncoding(robj *o) {
             decrRefCount(o);
             incrRefCount(shared.integers[value]);
             return shared.integers[value];
-        } else {
+        } else { //如果使用了最大内存限制，则需要LRU算法回收内存， 如果使用了共享对象，则无法正常计算，所以当存在最大内存限制的时候，需要创建自己的对象使用LRU参数记录使用次数
             if (o->encoding == REDIS_ENCODING_RAW) sdsfree(o->ptr);
             o->encoding = REDIS_ENCODING_INT;
             o->ptr = (void*) value;
@@ -686,8 +688,9 @@ int compareStringObjectsWithFlags(robj *a, robj *b, int flags) {
 
 	// 对比
     if (flags & REDIS_COMPARE_COLL) {
+        // 从第一个字符开始比较， 从头比较到尾，全部字符都要比较
         return strcoll(astr,bstr);
-    } else {
+    } else { // 只比较到最短字符串的长度
         int cmp;
 
         minlen = (alen < blen) ? alen : blen;
@@ -771,7 +774,9 @@ int getDoubleFromObject(robj *o, double *target) {
         // 尝试从字符串中转换 double 值
         if (sdsEncodedObject(o)) {
             errno = 0;
+            // strtod会将str中前部的double数字提取为value，再将value之后的字符串存储到eptr
             value = strtod(o->ptr, &eptr);
+            // 如果提取失败，则返回错误, 比如提取完double后还有其他的字符串， 都不是纯粹的double数字， 所以以下判断用来鉴别是否字符串能够彻底转换成一个数字
             if (isspace(((char*)o->ptr)[0]) ||
                 eptr[0] != '\0' ||
                 (errno == ERANGE &&
@@ -839,6 +844,7 @@ int getLongDoubleFromObject(robj *o, long double *target) {
         if (sdsEncodedObject(o)) {
             errno = 0;
             value = strtold(o->ptr, &eptr);
+            // 如果提取失败，则返回错误, 比如提取完long double后还有其他的字符串， 都不是纯粹的 Long double数字， 所以以下判断用来鉴别是否字符串能够彻底转换成一个数字
             if (isspace(((char*)o->ptr)[0]) || eptr[0] != '\0' ||
                 errno == ERANGE || isnan(value))
                 return REDIS_ERR;
@@ -907,7 +913,9 @@ int getLongLongFromObject(robj *o, long long *target) {
         if (sdsEncodedObject(o)) {
             errno = 0;
             // T = O(N)
+            // strtoll 获取ptr的第一个数值， 返回为value， 并索引此数值之后的位置到eptr， 第一个数值的进制取决于base传入的值
             value = strtoll(o->ptr, &eptr, 10);
+            // 如果对象内容是空格开头， 说明，是字符串， 如果数字提取出来之后的内容还有字符， 说明是字符串， 如果转换越界，说明数字范围大于longlong存储范围
             if (isspace(((char*)o->ptr)[0]) || eptr[0] != '\0' ||
                 errno == ERANGE)
                 return REDIS_ERR;
@@ -967,7 +975,7 @@ int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, con
 int getLongFromObjectOrReply(redisClient *c, robj *o, long *target, const char *msg) {
     long long value;
 
-    // 先尝试以 long long 类型取出值
+    // 先尝试以 long long 类型取出值, 此处取出的数字范围达到了Long Long存储范围， 但是这个函数是需要long范围
     if (getLongLongFromObjectOrReply(c, o, &value, msg) != REDIS_OK) return REDIS_ERR;
 
     // 然后检查值是否在 long 类型的范围之内
@@ -1008,9 +1016,11 @@ char *strEncoding(int encoding) {
 // 使用近似 LRU 算法，计算出给定对象的闲置时长
 unsigned long long estimateObjectIdleTime(robj *o) {
     unsigned long long lruclock = LRU_CLOCK();
+    //LRU时钟进行了位与操作， 如果当前的时钟大于对象的lru，说明高位已经保留， 时间间隔就是当前时间减去对象lru时间
     if (lruclock >= o->lru) {
         return (lruclock - o->lru) * REDIS_LRU_CLOCK_RESOLUTION;
     } else {
+        // 如果当前的时间小于对象的lru，说明高位已经被与操作完毕， 进入新的一轮周期， 需要用一个周期最后一位数减去对象lru， 加上当前的时间才是时间间隔
         return (lruclock + (REDIS_LRU_CLOCK_MAX - o->lru)) *
                     REDIS_LRU_CLOCK_RESOLUTION;
     }
@@ -1045,10 +1055,12 @@ robj *objectCommandLookupOrReply(redisClient *c, robj *key, robj *reply) {
 void objectCommand(redisClient *c) {
     robj *o;
 
-    // 返回对戏哪个的引用计数
+    // 返回key对应的引用计数
     if (!strcasecmp(c->argv[1]->ptr,"refcount") && c->argc == 3) {
+        // 获取这个对象， 但是不修改lru的使用时间
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nullbulk))
                 == NULL) return;
+        // 返回给客户端
         addReplyLongLong(c,o->refcount);
 
     // 返回对象的编码

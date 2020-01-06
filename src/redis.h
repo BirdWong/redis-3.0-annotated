@@ -407,7 +407,7 @@ typedef struct redisObject {
      * 位段(bit-field)是以位为单位来定义结构体(或联合体)中的成员变量所占的空间。含有位段的结构体(联合体)称为位段结构。
      * 位段的定义格式为:
      *  type [var]: digits
-     *  其中type只能为int，unsigned int，signed int三种类型
+     *  上面格式中的[type]只能为int，unsigned int，signed int三种类型
      */
 
     // 类型
@@ -431,6 +431,11 @@ typedef struct redisObject {
  * If the current resolution is lower than the frequency we refresh the
  * LRU clock (as it should be in production servers) we return the
  * precomputed value, otherwise we need to resort to a function call. */
+/*
+ * 获取当前的LRU时钟
+ * 如果hz设置的间隔小于1毫秒一次， 说明lruclock参数的精确值非常高， 不需要重新计算，
+ * 否则，lruclock的精确值不够， 需要获取最新的lruclock
+ */
 #define LRU_CLOCK() ((1000/server.hz <= REDIS_LRU_CLOCK_RESOLUTION) ? server.lruclock : getLRUClock())
 
 /* Macro used to initialize a Redis object allocated on the stack.

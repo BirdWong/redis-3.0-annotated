@@ -217,6 +217,13 @@ long long memtoll(const char *p, int *err) {
 /* Convert a long long into a string. Returns the number of
  * characters needed to represent the number, that can be shorter if passed
  * buffer length is not enough to store the whole number. */
+/**
+ * 将Long long类型转为str
+ * @param s 需要输出的str
+ * @param len 数字的长度
+ * @param value
+ * @return
+ */
 int ll2string(char *s, size_t len, long long value) {
     char buf[32], *p;
     unsigned long long v;
@@ -224,16 +231,22 @@ int ll2string(char *s, size_t len, long long value) {
 
     if (len == 0) return 0;
     v = (value < 0) ? -value : value;
+    // p字符串先定位到最后一个位置， 因为value需要从个位数开始转换， 所以从后向前
     p = buf+31; /* point to the last character */
     do {
         *p-- = '0'+(v%10);
         v /= 10;
     } while(v);
+    // 如果是负数， 则添加符号
     if (value < 0) *p-- = '-';
     p++;
+    // 开头buf位置减去从后向前p的位置， 得到剩余的位置， 用总长度减去剩余长度，得到字符长度
     l = 32-(p-buf);
+    // 如果l的长度大于len限制长度， 则l强制降位len的长度减1， 留一个位置为'\0'
     if (l+1 > len) l = len-1; /* Make sure it fits, including the nul term */
+    // 将转换后的内容，复制到输出字符串
     memcpy(s,p,l);
+    // 添加结束符
     s[l] = '\0';
     return l;
 }
@@ -250,22 +263,26 @@ int string2ll(const char *s, size_t slen, long long *value) {
     if (plen == slen)
         return 0;
 
+    // 如果字符串长度只有1，并且内容等于0， 直接返回0
     /* Special case: first and only digit is 0. */
     if (slen == 1 && p[0] == '0') {
         if (value != NULL) *value = 0;
         return 1;
     }
 
+    //如果字符串是负号开头
     if (p[0] == '-') {
         negative = 1;
         p++; plen++;
 
         /* Abort on only a negative sign. */
+        // 如果只有一个符号
         if (plen == slen)
             return 0;
     }
 
     /* First digit should be 1-9, otherwise the string should just be 0. */
+    // 如果现在是数字开头， 则可以进行数字判断， 否则不能是数字
     if (p[0] >= '1' && p[0] <= '9') {
         v = p[0]-'0';
         p++; plen++;
@@ -276,11 +293,14 @@ int string2ll(const char *s, size_t slen, long long *value) {
         return 0;
     }
 
+    // 当剩余的字符串都是数字的时候进行转换
     while (plen < slen && p[0] >= '0' && p[0] <= '9') {
+        // 如果再将字符串转换成数字会超出最大的Long结构的存储返回， 则返回转换失败
         if (v > (ULLONG_MAX / 10)) /* Overflow. */
             return 0;
         v *= 10;
 
+        // 如果目前数字加上需要添加的大于LONG存储的最大范围，则返回失败
         if (v > (ULLONG_MAX - (p[0]-'0'))) /* Overflow. */
             return 0;
         v += p[0]-'0';
@@ -289,14 +309,18 @@ int string2ll(const char *s, size_t slen, long long *value) {
     }
 
     /* Return if not all bytes were used. */
+    // 如果还剩余字符没有转换完毕， 说明字符串存在非数字字符
     if (plen < slen)
         return 0;
 
+    // 如果是负数
     if (negative) {
+        // 有符号存储的范围小于无符号， 如果v小于long能够存储的最小的数字，则转换失败
         if (v > ((unsigned long long)(-(LLONG_MIN+1))+1)) /* Overflow. */
             return 0;
         if (value != NULL) *value = -v;
     } else {
+        // 如果数字大于long能够存储的最大范围， 则转换失败
         if (v > LLONG_MAX) /* Overflow. */
             return 0;
         if (value != NULL) *value = v;

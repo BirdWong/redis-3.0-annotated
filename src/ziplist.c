@@ -328,7 +328,7 @@ typedef struct zlentry {
     // 当前节点值所使用的编码类型
     unsigned char encoding;
 
-    // 指向当前节点的指针
+    // 指向当前节点的内容指针
     unsigned char *p;
 
 } zlentry;
