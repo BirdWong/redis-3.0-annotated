@@ -487,6 +487,10 @@ void msetnxCommand(redisClient *c) {
     msetGenericCommand(c,1);
 }
 
+/*
+ * key对incr进行运算
+ * 如果key对应的value不是一个数字类型， 则不能自增， 否则可以自增， 但是需要注意数字自增的范围
+ */
 void incrDecrCommand(redisClient *c, long long incr) {
     long long value, oldvalue;
     robj *o, *new;
@@ -533,14 +537,23 @@ void incrDecrCommand(redisClient *c, long long incr) {
     addReply(c,shared.crlf);
 }
 
+/*
+ * 不指定incr的自增， 默认加1
+ */
 void incrCommand(redisClient *c) {
     incrDecrCommand(c,1);
 }
 
+/*
+ * 不指定incr的自减，默认减1
+ */
 void decrCommand(redisClient *c) {
     incrDecrCommand(c,-1);
 }
 
+/*
+ * 自己指定自增的大小
+ */
 void incrbyCommand(redisClient *c) {
     long long incr;
 
@@ -548,6 +561,9 @@ void incrbyCommand(redisClient *c) {
     incrDecrCommand(c,incr);
 }
 
+/*
+ * 指定自减大小
+ */
 void decrbyCommand(redisClient *c) {
     long long incr;
 
@@ -555,6 +571,9 @@ void decrbyCommand(redisClient *c) {
     incrDecrCommand(c,-incr);
 }
 
+/*
+ * key对应value的浮点数运算
+ */
 void incrbyfloatCommand(redisClient *c) {
     long double incr, value;
     robj *o, *new, *aux;
@@ -608,6 +627,9 @@ void incrbyfloatCommand(redisClient *c) {
     rewriteClientCommandArgument(c,2,new);
 }
 
+/*
+ * 追加字符串内容
+ */
 void appendCommand(redisClient *c) {
     size_t totlen;
     robj *o, *append;
