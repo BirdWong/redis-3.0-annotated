@@ -88,6 +88,7 @@ static int checkStringLength(redisClient *c, long long size) {
 
 void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *expire, int unit, robj *ok_reply, robj *abort_reply) {
 
+    // 用于存储过期时间参数
     long long milliseconds = 0; /* initialized to avoid any harmness warning */
 
     // 取出过期时间
@@ -112,6 +113,8 @@ void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *ex
 
     // 如果设置了 NX 或者 XX 参数，那么检查条件是否不符合这两个设置
     // 在条件不符合时报错，报错的内容由 abort_reply 参数决定
+    // nx 仅在key不存在时执行
+    // xx 仅在key存在时执行
     if ((flags & REDIS_SET_NX && lookupKeyWrite(c->db,key) != NULL) ||
         (flags & REDIS_SET_XX && lookupKeyWrite(c->db,key) == NULL))
     {
@@ -125,7 +128,7 @@ void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *ex
     // 将数据库设为脏
     server.dirty++;
 
-    // 为键设置过期时间
+    // 为键设置过期时间, 设置的值为 当前时间+过期时间长度
     if (expire) setExpire(c->db,key,mstime()+milliseconds);
 
     // 发送事件通知
@@ -150,6 +153,11 @@ void setCommand(redisClient *c) {
     // 设置选项参数
     for (j = 3; j < c->argc; j++) {
         char *a = c->argv[j]->ptr;
+        /*
+         * 如果是倒数第二个参数， 则尝试获取最后一个参数
+         * 如果当前参数匹配了过期时间配置参数，
+         * 则设置最后一个参数为过期时间， 避免出现set value ex 10 px 10情况，
+         */
         robj *next = (j == c->argc-1) ? NULL : c->argv[j+1];
 
         if ((a[0] == 'n' || a[0] == 'N') &&
@@ -180,21 +188,33 @@ void setCommand(redisClient *c) {
     setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
 }
 
+/*
+ * 等同set key value nx
+ */
 void setnxCommand(redisClient *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     setGenericCommand(c,REDIS_SET_NX,c->argv[1],c->argv[2],NULL,0,shared.cone,shared.czero);
 }
 
+/*
+ * 等同 set key value ex
+ */
 void setexCommand(redisClient *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
     setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,NULL,NULL);
 }
 
+/*
+ * 等同 set key value px
+ */
 void psetexCommand(redisClient *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
     setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
 }
 
+/*
+ *
+ */
 int getGenericCommand(redisClient *c) {
     robj *o;
 
@@ -219,6 +239,9 @@ void getCommand(redisClient *c) {
     getGenericCommand(c);
 }
 
+/*
+ * 返回当前的key的value， 并且设置新的value到这个key
+ */
 void getsetCommand(redisClient *c) {
 
     // 取出并返回键的值对象
@@ -237,6 +260,10 @@ void getsetCommand(redisClient *c) {
     server.dirty++;
 }
 
+/*
+ * 根据offset索引覆盖当前value部分内容
+ * - 如果key不存在则设置这个key的value
+ */
 void setrangeCommand(redisClient *c) {
     robj *o;
     long offset;
@@ -290,7 +317,7 @@ void setrangeCommand(redisClient *c) {
         // 取出原有字符串的长度
         olen = stringObjectLen(o);
 
-        // value 为空，没有什么可设置的，向客户端返回 0
+        // value 为空，没有什么可设置的，向客户端返回存在的value的长度
         if (sdslen(value) == 0) {
             addReplyLongLong(c,olen);
             return;
@@ -329,6 +356,9 @@ void setrangeCommand(redisClient *c) {
     addReplyLongLong(c,sdslen(o->ptr));
 }
 
+/*
+ * 从索引start获取到end结束， 将去除的内容输出
+ */
 void getrangeCommand(redisClient *c) {
     robj *o;
     long start, end;
@@ -386,6 +416,7 @@ void mgetCommand(redisClient *c) {
         if (o == NULL) {
             // 值不存在，向客户端发送空回复
             addReply(c,shared.nullbulk);
+
         } else {
             if (o->type != REDIS_STRING) {
                 // 值存在，但不是字符串类型
