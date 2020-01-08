@@ -682,6 +682,9 @@ void appendCommand(redisClient *c) {
     addReplyLongLong(c,totlen);
 }
 
+/*
+ * 返回字符串长度， 如果是字符串直接返回长度， 如果是数字，先将数字转换成临时字符串， 然后计算字符串长度
+ */
 void strlenCommand(redisClient *c) {
     robj *o;
 
