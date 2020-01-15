@@ -337,11 +337,21 @@ int dbDelete(redisDb *db, robj *key) {
  * At this point the caller is ready to modify the object, for example
  * using an sdscat() call to append some data, or anything else.
  */
+/*
+ * 当需要对字符串对象进行修改的时候返回一个可供修改的字符串对象
+ * 判断一个对象是否能够被修改
+ *  1. 这个对象不能是共享对象
+ *  2. 这个对象必须死可变字符串
+ * 不满足以上条件， 则需要复制一个新的对象用于修改， 并重新指定key对象的value对象
+ */
 robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
     redisAssert(o->type == REDIS_STRING);
+    // 如果对象是共享对象或者不是可变字符串，需要将对象进行复制
     if (o->refcount != 1 || o->encoding != REDIS_ENCODING_RAW) {
+        // 将对象
         robj *decoded = getDecodedObject(o);
         o = createRawStringObject(decoded->ptr, sdslen(decoded->ptr));
+        // 在调用getDecodedObject的时候会增加引用或者创建对象 ，需要在这里恢复
         decrRefCount(decoded);
         dbOverwrite(db,key,o);
     }
