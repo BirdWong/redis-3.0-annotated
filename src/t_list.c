@@ -76,23 +76,38 @@ void listTypeTryConversion(robj *subject, robj *value) {
 void listTypePush(robj *subject, robj *value, int where) {
 
     /* Check if we need to convert the ziplist */
-    // 是否需要转换编码？
+    // 判断插入的内容长度是否需要转换编码
     listTypeTryConversion(subject,value);
 
+    // 当list是一个ziplist的时，ziplsit中的Entry个数大于规定的最大数量， 则转为双端列表
     if (subject->encoding == REDIS_ENCODING_ZIPLIST &&
         ziplistLen(subject->ptr) >= server.list_max_ziplist_entries)
             listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST);
 
-    // ZIPLIST
+    // ZIPLIST 判断插入头/插入尾
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
+        // 获取插入的位置
         int pos = (where == REDIS_HEAD) ? ZIPLIST_HEAD : ZIPLIST_TAIL;
-        // 取出对象的值，因为 ZIPLIST 只能保存字符串或整数
+        /*
+         * 取出对象的值，如果是数字将内容转换成字符串
+         * 这一步会有两个操作
+         *  如果value是字符串， 则增加引用次数
+         *  如果是数字，则转换成字符串， 并且地址赋值给value， 这个字符串是新建的
+         *  为什么字符串也要直接引用加1， 因为这里有可能会产生字符串， 这个字符串使用了一次之后就没用了，需要释放
+         *  如果字符串不是直接加1， 则后面进行释放的时候就需要进行多次判断。
+         *
+         *  这里补充一个知识点：
+         *      传输进来的value对象是一个指针， 传进来的只是地址， 如果对这个地址上的内容进行操作， 则联动引起其他的对象也会有变化
+         *      但是， 如果像以下这样 数字转字符串然后重新复制， 只是将本对象中的value的内容地址重新赋值了， 并不会有其他的影响
+         */
         value = getDecodedObject(value);
+        // 将内容插入到指定位置，同时去除value对象的引用，zfree， 因为ziplist中不需要引用其他对象， 是将对象的内容值放到自己的内存块中
         subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),pos);
         decrRefCount(value);
 
     // 双端链表
     } else if (subject->encoding == REDIS_ENCODING_LINKEDLIST) {
+        // 判断参数是需要插入头部还是尾部
         if (where == REDIS_HEAD) {
             listAddNodeHead(subject->ptr,value);
         } else {
@@ -121,9 +136,13 @@ robj *listTypePop(robj *subject, int where) {
 
     // ZIPLIST
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
+        // 获取元素的指针位置
         unsigned char *p;
+        // 如果是字符串保存元素的内容
         unsigned char *vstr;
+        // 如果是字符串， 保存元素的长度
         unsigned int vlen;
+        // 如果是数字， 保存元素值
         long long vlong;
 
         // 决定弹出元素的位置
@@ -294,18 +313,20 @@ int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
  * 如果 entry 没有记录任何节点，那么返回 NULL 。
  */
 robj *listTypeGet(listTypeEntry *entry) {
-
+    // 获取到记录中的迭代器
     listTypeIterator *li = entry->li;
 
     robj *value = NULL;
 
-    // 根据索引，从 ZIPLIST 中取出节点的值
+    // 根据迭代器中的编码不同， 从 ZIPLIST 中取出节点的值
     if (li->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *vstr;
         unsigned int vlen;
         long long vlong;
         redisAssert(entry->zi != NULL);
+        // 获取到迭代器目前所指向的节点对象， 如果对象为空或者已经到了末尾，则跳出if
         if (ziplistGet(entry->zi,&vstr,&vlen,&vlong)) {
+            // 如果vstr不为空， 则说明zlentry保存的是字符串内容， 创建字符串对象， 否则创建数字对象
             if (vstr) {
                 value = createStringObject((char*)vstr,vlen);
             } else {
@@ -317,12 +338,13 @@ robj *listTypeGet(listTypeEntry *entry) {
     } else if (li->encoding == REDIS_ENCODING_LINKEDLIST) {
         redisAssert(entry->ln != NULL);
         value = listNodeValue(entry->ln);
+        // 取出的为对象， 增加其引用次数
         incrRefCount(value);
 
     } else {
         redisPanic("Unknown list encoding");
     }
-
+    // 返回查询出的对象内容
     return value;
 }
 
@@ -408,6 +430,11 @@ void listTypeDelete(listTypeEntry *entry) {
 
     listTypeIterator *li = entry->li;
 
+    /*
+     * ZIPList可以先删除后获取指针迭代器位置是因为ZIPList是一整块内存
+     * 目前这个指向的对象的内存块被删除了，就会把下一个的对象的开始位置移动到p的地址上， 所以不会丢失下一个位置的内容
+     * 双端链表不同， 如果中间的任何一个对象丢失， 整个链表都会断成两截
+     */
     // ZIPLIST
     if (li->encoding == REDIS_ENCODING_ZIPLIST) {
 
@@ -460,6 +487,7 @@ void listTypeConvert(robj *subject, int enc) {
 
         list *l = listCreate();
 
+        // 设置释放函数
         listSetFreeMethod(l,decrRefCountVoid);
 
         /* listTypeGet returns a robj with incremented refcount */
@@ -486,22 +514,28 @@ void listTypeConvert(robj *subject, int enc) {
  * List Commands
  *----------------------------------------------------------------------------*/
 
+/**
+ * 将key values添加到指定数据库中的keys中
+ * @param c 客户端连接
+ * @param where 标记从头部添加还是从尾部添加
+ */
 void pushGenericCommand(redisClient *c, int where) {
 
     int j, waiting = 0, pushed = 0;
 
-    // 取出列表对象
+    // 根据选中的数据库和第二个参数（key）取出对象
     robj *lobj = lookupKeyWrite(c->db,c->argv[1]);
 
     // 如果列表对象不存在，那么可能有客户端在等待这个键的出现
     int may_have_waiting_clients = (lobj == NULL);
 
+    // 如果这个对象不是List对象，则命令错误
     if (lobj && lobj->type != REDIS_LIST) {
         addReply(c,shared.wrongtypeerr);
         return;
     }
 
-    // 将列表状态设置为就绪
+    // 如果确实这个obj是空，将列表状态设置为就绪
     if (may_have_waiting_clients) signalListAsReady(c,c->argv[1]);
 
     // 遍历所有输入值，并将它们添加到列表中
@@ -535,25 +569,41 @@ void pushGenericCommand(redisClient *c, int where) {
         // 发送事件通知
         notifyKeyspaceEvent(REDIS_NOTIFY_LIST,event,c->argv[1],c->db->id);
     }
-
+    // 更新数据库自上次rdb后修改次数
     server.dirty += pushed;
 }
 
+/**
+ * lpush命令实现
+ * @param c 客户端连接
+ */
 void lpushCommand(redisClient *c) {
     pushGenericCommand(c,REDIS_HEAD);
 }
 
+/**
+ * rpush命令实现
+ * @param c 客户端连接
+ */
 void rpushCommand(redisClient *c) {
     pushGenericCommand(c,REDIS_TAIL);
 }
 
+
+/**
+ * push命令的hx实现
+ * @param c 客户端连接
+ * @param refval 如果是linsert命令， 这个表示需要匹配的obj
+ * @param val   需要插入的内容
+ * @param where 插入的顺序
+ */
 void pushxGenericCommand(redisClient *c, robj *refval, robj *val, int where) {
     robj *subject;
     listTypeIterator *iter;
     listTypeEntry entry;
     int inserted = 0;
 
-    // 取出列表对象
+    // 取出列表对象, 如果对象不存在、不是list对象则直接返回
     if ((subject = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,subject,REDIS_LIST)) return;
 
@@ -565,6 +615,7 @@ void pushxGenericCommand(redisClient *c, robj *refval, robj *val, int where) {
          * to do the actual insert), so we assume this value can be inserted
          * and convert the ziplist to a regular list if necessary. */
         // 看保存值 value 是否需要将列表编码转换为双端链表
+        // 检查的是单个value的长度限制
         listTypeTryConversion(subject,val);
 
         /* Seek refval from head to tail */
@@ -583,6 +634,7 @@ void pushxGenericCommand(redisClient *c, robj *refval, robj *val, int where) {
         if (inserted) {
             /* Check if the length exceeds the ziplist length threshold. */
             // 查看插入之后是否需要将编码转换为双端链表
+            // 检查的是list的长度限制
             if (subject->encoding == REDIS_ENCODING_ZIPLIST &&
                 ziplistLen(subject->ptr) > server.list_max_ziplist_entries)
                     listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST);
@@ -615,16 +667,28 @@ void pushxGenericCommand(redisClient *c, robj *refval, robj *val, int where) {
     addReplyLongLong(c,listTypeLength(subject));
 }
 
+/**
+ * lpushhx 命令
+ * @param c 客户端连接
+ */
 void lpushxCommand(redisClient *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     pushxGenericCommand(c,NULL,c->argv[2],REDIS_HEAD);
 }
 
+/**
+ * rpushhx 命令
+ * @param c 客户端连接
+ */
 void rpushxCommand(redisClient *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     pushxGenericCommand(c,NULL,c->argv[2],REDIS_TAIL);
 }
 
+/**
+ * linsert 命令实现， linsert命令默认如果list不存在则返回空， linsert可以选择插入的方向
+ * @param c
+ */
 void linsertCommand(redisClient *c) {
 
     // 编码 refval 对象
@@ -641,15 +705,25 @@ void linsertCommand(redisClient *c) {
     }
 }
 
+/**
+ * 统计一个list中的value个数
+ * @param c 客户端连接
+ */
 void llenCommand(redisClient *c) {
 
+    // 获取这个key
     robj *o = lookupKeyReadOrReply(c,c->argv[1],shared.czero);
-
+    // 如果不存在或者不是List直接返回
     if (o == NULL || checkType(c,o,REDIS_LIST)) return;
 
+    // 返回list长度
     addReplyLongLong(c,listTypeLength(o));
 }
 
+/**
+ * lindex命令， 返回指定位置的元素内容， 如果key不存在或者指定位置为空返回null
+ * @param c  客户端连接
+ */
 void lindexCommand(redisClient *c) {
 
     robj *o = lookupKeyReadOrReply(c,c->argv[1],shared.nullbulk);
@@ -699,6 +773,10 @@ void lindexCommand(redisClient *c) {
     }
 }
 
+/**
+ * lset 命令， 将指定位置的内容替换成新的内容， 如果指定位置为空则返回错误
+ * @param c
+ */
 void lsetCommand(redisClient *c) {
 
     // 取出列表对象
@@ -728,8 +806,12 @@ void lsetCommand(redisClient *c) {
             // 删除现有的值
             o->ptr = ziplistDelete(o->ptr,&p);
             // 插入新值到指定索引
+            // value之前被尝试编码， 有可能被转换成了整数 例如 整数10，但是ziplist这个函数只能接收字符串
+            // 所以需要将其转化为字符串对象.ziplist并不会将其直接保存， 如果可以转换成整数还是会再次转换成整数
             value = getDecodedObject(value);
             o->ptr = ziplistInsert(o->ptr,p,value->ptr,sdslen(value->ptr));
+            // 如果上面为此特意创建了字符串则这里会进行回收
+            // 如果使用的是共享对象，则会在执行完命令后链接重置的时候减少引用
             decrRefCount(value);
 
             addReply(c,shared.ok);
@@ -762,6 +844,11 @@ void lsetCommand(redisClient *c) {
     }
 }
 
+/**
+ * 弹出list中的元素， 并且将这个元素内容输出
+ * @param c  用户连接
+ * @param where 弹出的方向
+ */
 void popGenericCommand(redisClient *c, int where) {
 
     // 取出列表对象
@@ -791,14 +878,26 @@ void popGenericCommand(redisClient *c, int where) {
     }
 }
 
+/**
+ * lpop命令，从头部弹出
+ * @param c
+ */
 void lpopCommand(redisClient *c) {
     popGenericCommand(c,REDIS_HEAD);
 }
 
+/**
+ * rpop命令， 从尾部弹出
+ * @param c
+ */
 void rpopCommand(redisClient *c) {
     popGenericCommand(c,REDIS_TAIL);
 }
 
+/**
+ * 返回一定范围内的元素数据， 可以使用负数索引从后往前遍历
+ * @param c
+ */
 void lrangeCommand(redisClient *c) {
     robj *o;
     long start, end, llen, rangelen;
@@ -868,6 +967,10 @@ void lrangeCommand(redisClient *c) {
     }
 }
 
+/**
+ * 将list进行剪切，只保留start —— end 之间的内容
+ * @param c
+ */
 void ltrimCommand(redisClient *c) {
     robj *o;
     long start, end, llen, j, ltrim, rtrim;
@@ -945,6 +1048,10 @@ void ltrimCommand(redisClient *c) {
     addReply(c,shared.ok);
 }
 
+/**
+ * 删除list中指定元素， 并且决定从头部还是尾部开始删除， 达到指定个数后停止删除
+ * @param c
+ */
 void lremCommand(redisClient *c) {
     robj *subject, *obj;
 
@@ -1015,16 +1122,25 @@ void lremCommand(redisClient *c) {
  * since the element is not just returned but pushed against another list
  * as well. This command was originally proposed by Ezra Zygmuntowicz.
  */
-
+/**
+ * 将value放入dstkey的列表中， 如果dstkey不存在，则创建一个
+ * @param c 客户端连接
+ * @param dstkey 目标 list 的key
+ * @param dstobj 被转移的list
+ * @param value 等待添加的内容
+ */
 void rpoplpushHandlePush(redisClient *c, robj *dstkey, robj *dstobj, robj *value) {
     /* Create the list if the key does not exist */
     // 如果目标列表不存在，那么创建一个
     if (!dstobj) {
+        // 创建一个list
         dstobj = createZiplistObject();
+        // 将list以dstkey为key放入指定的数据库中
         dbAdd(c->db,dstkey,dstobj);
+        // 如果有阻塞等待这个key的则通知准备完毕
         signalListAsReady(c,dstkey);
     }
-
+    // 通知正在监控这个key的修改信息
     signalModifiedKey(c->db,dstkey);
 
     // 将值推入目标列表中
@@ -1035,6 +1151,12 @@ void rpoplpushHandlePush(redisClient *c, robj *dstkey, robj *dstobj, robj *value
     addReplyBulk(c,value);
 }
 
+/**
+ * c中有两个参数
+ *  sobj：被转移list
+ *  dobj：目标list
+ * @param c
+ */
 void rpoplpushCommand(redisClient *c) {
     robj *sobj, *value;
     
@@ -1319,6 +1441,7 @@ int serveClientBlockedOnList(redisClient *receiver, robj *key, robj *dstkey, red
         argv[0] = (where == REDIS_HEAD) ? shared.lpop :
                                           shared.rpop;
         argv[1] = key;
+        // 传播到AOF或者slave
         propagate((where == REDIS_HEAD) ?
             server.lpopCommand : server.rpopCommand,
             db->id,argv,2,REDIS_PROPAGATE_AOF|REDIS_PROPAGATE_REPL);

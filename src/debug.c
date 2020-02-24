@@ -410,25 +410,36 @@ void _redisAssert(char *estr, char *file, int line) {
     *((char*)-1) = 'x';
 }
 
+/**
+ * 输出这个链接的信息
+ * @param c redis 连接
+ */
 void _redisAssertPrintClientInfo(redisClient *c) {
     int j;
 
     bugReportStart();
+    // 如果是只答应warning以上的级别，则打印连接的信息， 这个用于排错
     redisLog(REDIS_WARNING,"=== ASSERTION FAILED CLIENT CONTEXT ===");
+    // 当前的链接状态
     redisLog(REDIS_WARNING,"client->flags = %d", c->flags);
+    // 数据文件的句柄
     redisLog(REDIS_WARNING,"client->fd = %d", c->fd);
+    // 目前命令的数量
     redisLog(REDIS_WARNING,"client->argc = %d", c->argc);
+    // 遍历所有的命令
     for (j=0; j < c->argc; j++) {
         char buf[128];
         char *arg;
-
+        // 如果命令是STRING类型， 并且编码是动态编码/静态编码， 直接读取数据中的字符串
         if (c->argv[j]->type == REDIS_STRING && sdsEncodedObject(c->argv[j])) {
             arg = (char*) c->argv[j]->ptr;
         } else {
+            // 否则的话输出这个对象的编码对象和类型
             snprintf(buf,sizeof(buf),"Object type: %d, encoding: %d",
                 c->argv[j]->type, c->argv[j]->encoding);
             arg = buf;
         }
+        // 输出这个命令列表中的这条命令
         redisLog(REDIS_WARNING,"client->argv[%d] = \"%s\" (refcount: %d)",
             j, arg, c->argv[j]->refcount);
     }
@@ -458,6 +469,10 @@ void redisLogObjectDebugInfo(robj *o) {
     }
 }
 
+/**
+ * 输出这个redis对象的内容
+ * @param o
+ */
 void _redisAssertPrintObject(robj *o) {
     bugReportStart();
     redisLog(REDIS_WARNING,"=== ASSERTION FAILED OBJECT CONTEXT ===");

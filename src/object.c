@@ -29,6 +29,7 @@
  */
 
 #include "redis.h"
+#include "lzfP.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -565,7 +566,8 @@ robj *tryObjectEncoding(robj *o) {
             decrRefCount(o);
             incrRefCount(shared.integers[value]);
             return shared.integers[value];
-        } else { //如果使用了最大内存限制，则需要LRU算法回收内存， 如果使用了共享对象，则无法正常计算，所以当存在最大内存限制的时候，需要创建自己的对象使用LRU参数记录使用次数
+        } else {
+            //如果使用了最大内存限制，则需要LRU算法回收内存， 如果使用了共享对象，则无法正常计算，所以当存在最大内存限制的时候，需要创建自己的对象使用LRU参数记录使用次数
             if (o->encoding == REDIS_ENCODING_RAW) sdsfree(o->ptr);
             o->encoding = REDIS_ENCODING_INT;
             o->ptr = (void*) value;

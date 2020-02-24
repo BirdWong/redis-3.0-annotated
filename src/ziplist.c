@@ -186,6 +186,7 @@
 #include "ziplist.h"
 #include "endianconv.h"
 #include "redisassert.h"
+#include "lzfP.h"
 
 /*
  * ziplist 末端标识符，以及 5 字节长长度标识符
@@ -642,13 +643,13 @@ static int zipTryEncoding(unsigned char *entry, unsigned int entrylen, long long
     // 忽略太长或太短的字符串， 长度为0（数字0时entrylen也要为1）或者长度大于32的绝对不是整数
     if (entrylen >= 32 || entrylen == 0) return 0;
 
-    // 尝试转换
+    // 尝试转换成整数
     // T = O(N)
     if (string2ll((char*)entry,entrylen,&value)) {
 
         /* Great, the string can be encoded. Check what's the smallest
          * of our encoding types that can hold this value. */
-        // 转换成功，以从小到大的顺序检查适合值 value 的编码方式
+        // 转换成功，以从小到大的顺序值检查适合 value 的编码方式
         if (value >= 0 && value <= 12) {
             *encoding = ZIP_INT_IMM_MIN+value;
         } else if (value >= INT8_MIN && value <= INT8_MAX) {
@@ -1349,7 +1350,7 @@ unsigned char *ziplistIndex(unsigned char *zl, int index) {
         // 定位到表尾节点
         p = ZIPLIST_ENTRY_TAIL(zl);
 
-        // 如果列表不为空，那么。。。
+        // 如果列表不为空
         if (p[0] != ZIP_END) {
 
             // 从表尾向表头遍历
@@ -1469,15 +1470,20 @@ unsigned char *ziplistPrev(unsigned char *zl, unsigned char *p) {
  * 提取值成功返回 1 ，
  * 如果 p 为空，或者 p 指向的是列表末端，那么返回 0 ，提取值失败。
  *
+ * 赋值
+ *  sstr：如果是字符串时， 保存字符串的内容
+ *  slen：如果是字符串时保存字符串的长度
+ *  sval：如果是整数， 返回解码后的整数值
  * T = O(1)
  */
 unsigned int ziplistGet(unsigned char *p, unsigned char **sstr, unsigned int *slen, long long *sval) {
 
     zlentry entry;
+    // 如果zlentry对象是空， 或者p已经指向list末尾内容为空， 返回0
     if (p == NULL || p[0] == ZIP_END) return 0;
     if (sstr) *sstr = NULL;
 
-    // 取出 p 所指向的节点的各项信息，并保存到结构 entry 中
+    // 取出 p 所指向的节点的所有信息，并保存到结构 entry 中
     // T = O(1)
     entry = zipEntry(p);
 

@@ -341,7 +341,7 @@ int dbDelete(redisDb *db, robj *key) {
  * 当需要对字符串对象进行修改的时候返回一个可供修改的字符串对象
  * 判断一个对象是否能够被修改
  *  1. 这个对象不能是共享对象
- *  2. 这个对象必须死可变字符串
+ *  2. 这个对象必须是可变字符串
  * 不满足以上条件， 则需要复制一个新的对象用于修改， 并重新指定key对象的value对象
  */
 robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
@@ -573,6 +573,7 @@ void keysCommand(redisClient *c) {
 
     // 遍历整个数据库，返回（名字）和模式匹配的键
     di = dictGetSafeIterator(c->db->dict);
+    // 如果是全匹配模式
     allkeys = (pattern[0] == '*' && pattern[1] == '\0');
     while((de = dictNext(di)) != NULL) {
         sds key = dictGetKey(de);
@@ -935,6 +936,7 @@ void shutdownCommand(redisClient *c) {
      * with half-read data).
      *
      * Also when in Sentinel mode clear the SAVE flag and force NOSAVE. */
+    //如果集群中正在加载数据， 或者是哨兵模式的时候取消save指令，以免污染现有的rdb文件
     if (server.loading || server.sentinel_mode)
         flags = (flags & ~REDIS_SHUTDOWN_SAVE) | REDIS_SHUTDOWN_NOSAVE;
 
@@ -1402,7 +1404,7 @@ void persistCommand(redisClient *c) {
     de = dictFind(c->db->dict,c->argv[1]->ptr);
 
     if (de == NULL) {
-        // 键没有过期时间
+        // 没有键所以没有过期时间
         addReply(c,shared.czero);
 
     } else {

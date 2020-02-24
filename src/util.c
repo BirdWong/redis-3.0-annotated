@@ -41,19 +41,32 @@
 #include "util.h"
 
 /* Glob-style pattern matching. */
+/**
+ * 正则匹配
+ * @param pattern 匹配规则
+ * @param patternLen  匹配规则长度
+ * @param string  待匹配字符串
+ * @param stringLen  待匹配字符串长度
+ * @param nocase 是否忽略大小写 0：不忽略 1：忽略
+ * @return
+ */
 int stringmatchlen(const char *pattern, int patternLen,
         const char *string, int stringLen, int nocase)
 {
     while(patternLen) {
         switch(pattern[0]) {
+        //模式的当前字符为*， 则只需要模式中连续*以后的部分与给定string的某后部分匹配即可
         case '*':
             while (pattern[1] == '*') {
                 pattern++;
                 patternLen--;
             }
+            //到此，说明模式全为*， 直接匹配
             if (patternLen == 1)
                 return 1; /* match */
             while(stringLen) {
+                //模式前部分全为*， 则只需后部分与string 的某后部分匹配即可
+                //依次往后查找string中的该“某后部分”，直到匹配，或者到尾部
                 if (stringmatchlen(pattern+1, patternLen-1,
                             string, stringLen, nocase))
                     return 1; /* match */
@@ -63,12 +76,14 @@ int stringmatchlen(const char *pattern, int patternLen,
             return 0; /* no match */
             break;
         case '?':
+            //模式的当前字符为？ ，则直接跳过string的当前字符，从下一字符开始判断
             if (stringLen == 0)
                 return 0; /* no match */
             string++;
             stringLen--;
             break;
         case '[':
+        //模式的当前字符为[  ，范围，需要根据下一字符确定是为为 ^
         {
             int not, match;
 
@@ -87,12 +102,14 @@ int stringmatchlen(const char *pattern, int patternLen,
                     if (pattern[0] == string[0])
                         match = 1;
                 } else if (pattern[0] == ']') {
+                    //[]里面为空
                     break;
                 } else if (patternLen == 0) {
                     pattern--;
                     patternLen++;
                     break;
                 } else if (pattern[1] == '-' && patternLen >= 3) {
+                    //如[1-8]:即1到8中的任意一个字符 ，只要string当前字符在此范围内
                     int start = pattern[0];
                     int end = pattern[2];
                     int c = string[0];
@@ -137,6 +154,8 @@ int stringmatchlen(const char *pattern, int patternLen,
             }
             /* fall through */
         default:
+            // 如果没有正则表达式的关键字符，则直接比较
+            //判断是否忽略大小写
             if (!nocase) {
                 if (pattern[0] != string[0])
                     return 0; /* no match */
